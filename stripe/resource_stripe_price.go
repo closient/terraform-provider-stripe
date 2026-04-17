@@ -854,7 +854,20 @@ func resourceStripePriceUpdate(ctx context.Context, d *schema.ResourceData, m in
 }
 
 func resourceStripePriceDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	tflog.Warn(ctx, "[WARN] Stripe API doesn't support deletion of promotion code")
+	// Stripe has no DELETE /v1/prices/{id} endpoint — prices are immutable once
+	// referenced by an invoice or subscription. The closest semantic to "delete"
+	// is POST /v1/prices/{id} {active: false}, which hides the price from
+	// dj-stripe syncs, Dashboard's Active filter, and prevents it from being
+	// added to new subscriptions. Existing subscriptions continue to bill off
+	// the archived price (that's how Stripe treats archived prices).
+	c := m.(*client.API)
+	_, err := c.Prices.Update(d.Id(), &stripe.PriceParams{
+		Active: stripe.Bool(false),
+	})
+	if err != nil {
+		return diag.FromErr(err)
+	}
+	tflog.Info(ctx, "Stripe prices cannot be deleted; archived via active=false instead")
 	d.SetId("")
 	return nil
 }
