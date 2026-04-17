@@ -1,53 +1,60 @@
-# Private fork notes
+# Closient's fork of terraform-provider-stripe
 
-This is closient's private fork of
-[`lukasaron/terraform-provider-stripe`](https://github.com/lukasaron/terraform-provider-stripe),
-which was archived upstream 2026-04-17. Forked at `v3.4.1`.
+Fork of [`lukasaron/terraform-provider-stripe`](https://github.com/lukasaron/terraform-provider-stripe),
+which was archived upstream 2026-04-17. Baselined at `v3.4.1`. **Published to
+the public Terraform Registry at [`closient/stripe`](https://registry.terraform.io/providers/closient/stripe).**
+
+Issues, Discussions, Wiki, and Projects are intentionally disabled on this
+repo — this fork exists to unblock closient's internal usage, not to host a
+community. External PRs are welcome but won't be prioritized.
 
 ## Why fork
 
-`stripe_price`'s delete path was a no-op: removing the resource from Terraform
-config reported "destruction complete" but the price stayed `active=true` in
-Stripe. We hit this in C-2314 (Closient billing pivot — 16 legacy Business
-prices stayed active across both envs after Terraform apply). With upstream
-archived, the fix has to live here.
+`stripe_price`'s destroy path was a no-op: removing the resource from
+Terraform config reported "destruction complete" but the price stayed
+`active=true` in Stripe. We hit this in [C-2314](https://linear.app/closient/issue/C-2314)
+(billing pivot — 16 legacy prices stayed active across both envs after
+Terraform apply). Upstream is archived so the fix has to live here.
 
 ## What this fork changes
 
 | Commit | Change |
 |--------|--------|
-| C-2336 | `stripe/resource_stripe_price.go::resourceStripePriceDelete` now calls `POST /v1/prices/{id} {active: false}` instead of silently no-oping. Also fixes the mis-worded "promotion code" log that was copy-pasted from the promotion-code delete handler. |
+| [#2](https://github.com/closient/terraform-provider-stripe/pull/2) | `stripe/resource_stripe_price.go::resourceStripePriceDelete` now calls `POST /v1/prices/{id} {active: false}` instead of silently no-oping. Also fixes the mis-worded "promotion code" log that was copy-pasted from the promotion-code delete handler. |
 
-## Publishing
+## Release
 
-Tags matching `v*` trigger `.github/workflows/release.yml`:
+Tags matching `v*` on `main` trigger `.github/workflows/release.yml`:
 
-1. GoReleaser builds per-platform zips + `SHA256SUMS` + `manifest.json`
-   (config: `.github/gorelease.yml`; no GPG signing — the Terraform Network
-   Mirror protocol authenticates via SHA256 hashes, not signatures)
-2. Upload to GitHub Releases (source of truth)
-3. Build a Terraform Network Mirror JSON manifest (`index.json` +
-   `<version>.json`) keyed by platform with `h1:` hashes
-4. Sync manifests + zips to `s3://${MIRROR_BUCKET}/closient/stripe/`
+1. GoReleaser builds per-platform zips + SHA256SUMS + GPG-signed checksum
+2. Uploads to GitHub Releases (picked up by Terraform Registry webhook)
+
+Release-signing key: registered with the Registry under the `closient`
+namespace. Private key + passphrase live in the repo's Actions secrets
+(`GPG_PRIVATE_KEY`, `PASSPHRASE`). Public key is `.github/gpg-public-key.asc`
+in this repo for reference.
 
 ## Consuming
 
-Atlantis + local dev read via a Terraform Network Mirror configured in
-`.terraformrc` pointing at `${MIRROR_BASE_URL}`. Atlantis config lives in
-`closient/closient` under `terraform/accounts/developer-resources/atlantis.tf`.
+Standard registry syntax, no mirror needed:
 
-To bump to a new version:
+```hcl
+terraform {
+  required_providers {
+    stripe = {
+      source  = "closient/stripe"
+      version = "~> 3.4"
+    }
+  }
+}
+```
 
-1. Cut a tag here (`git tag v3.4.2 && git push origin v3.4.2`)
-2. Watch the release workflow publish to S3
-3. Bump `required_providers.stripe.version` in `closient/closient`
+## Bumping to a new upstream release
 
-## Staying close to upstream
+When upstream gets a maintained successor, prefer switching back. Until then,
+periodically:
 
-When upstream eventually gets replaced by a maintained alternative, we want to
-be able to migrate back with minimal diff. So:
-
-* Don't add features speculatively. Only diffs we can point at a ticket.
-* Keep changes to the delete/archive path and obvious bugs.
-* If we accumulate enough changes, publish via `lukasaron/stripe` fork URL in
-  GitHub + revisit whether a community-maintained fork has emerged.
+1. `git fetch upstream && git log upstream/main --oneline` to see new commits
+   (upstream is archived so this is usually a no-op, but check anyway).
+2. Cherry-pick relevant changes, keep our one-line delete fix.
+3. Bump version, tag, push.

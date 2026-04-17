@@ -1,13 +1,17 @@
-name: release
+# Terraform Provider release workflow.
+name: Release
 
+# This GitHub action creates a release when a tag that matches the pattern
+# "v*" (e.g. v0.1.0) is created.
 on:
   push:
     tags:
       - 'v*'
 
+# Releases need permissions to read and write the repository contents.
+# GitHub considers creating releases and uploading assets as writing contents.
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   goreleaser:
@@ -15,91 +19,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # Allow goreleaser to access older tag information.
           fetch-depth: 0
-
       - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
           cache: true
-
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        id: import_gpg
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           args: --config=.github/gorelease.yml release --clean
         env:
+          # GitHub sets the GITHUB_TOKEN secret automatically.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Configure AWS credentials for S3 mirror
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.MIRROR_PUBLISH_ROLE_ARN }}
-          aws-region: us-west-2
-
-      - name: Build Terraform Network Mirror manifests
-        env:
-          MIRROR_URL: ${{ vars.MIRROR_BASE_URL }}
-          MIRROR_BUCKET: ${{ vars.MIRROR_BUCKET }}
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          NS=closient
-          TYPE=stripe
-          DIR="mirror/${NS}/${TYPE}"
-          mkdir -p "${DIR}"
-
-          # Per-version manifest: archives keyed by platform, `h1:` hash per
-          # zip (SHA256 of the zip bytes, base64-encoded — the Go-module h1
-          # format that Terraform accepts in the network_mirror protocol).
-          VERSION="${VERSION}" MIRROR_URL="${MIRROR_URL}" NS="${NS}" TYPE="${TYPE}" \
-            python3 - "${DIR}/${VERSION}.json" <<'PY'
-          import base64, glob, hashlib, json, os, sys
-          out_path = sys.argv[1]
-          mirror_url = os.environ["MIRROR_URL"].rstrip("/")
-          ns = os.environ["NS"]
-          type_ = os.environ["TYPE"]
-          archives = {}
-          for zip_path in sorted(glob.glob("dist/*.zip")):
-              name = os.path.basename(zip_path)
-              # terraform-provider-stripe_${VERSION}_${OS}_${ARCH}.zip — last
-              # two underscore-separated segments are OS + arch.
-              stem = name.rsplit(".zip", 1)[0]
-              parts = stem.split("_")
-              plat = f"{parts[-2]}_{parts[-1]}"
-              with open(zip_path, "rb") as f:
-                  sha = hashlib.sha256(f.read()).digest()
-              h1 = "h1:" + base64.standard_b64encode(sha).decode()
-              archives[plat] = {
-                  "url": f"{mirror_url}/{ns}/{type_}/{name}",
-                  "hashes": [h1],
-              }
-          with open(out_path, "w") as f:
-              json.dump({"archives": archives}, f, indent=2)
-          PY
-
-          # Top-level index: merge this version into whatever S3 already has.
-          if aws s3 cp "s3://${MIRROR_BUCKET}/${NS}/${TYPE}/index.json" "${DIR}/index.json.old" 2>/dev/null; then
-            :
-          else
-            echo '{"versions":{}}' > "${DIR}/index.json.old"
-          fi
-          VERSION="${VERSION}" OLD="${DIR}/index.json.old" NEW="${DIR}/index.json" \
-            python3 - <<'PY'
-          import json, os
-          with open(os.environ["OLD"]) as f:
-              index = json.load(f)
-          index.setdefault("versions", {})[os.environ["VERSION"]] = {}
-          with open(os.environ["NEW"], "w") as f:
-              json.dump(index, f, indent=2)
-          PY
-
-          # Stage zips alongside the manifests for a single sync upload.
-          cp dist/*.zip "${DIR}/"
-
-      - name: Publish to S3 mirror
-        env:
-          MIRROR_BUCKET: ${{ vars.MIRROR_BUCKET }}
-        run: |
-          set -euo pipefail
-          aws s3 sync mirror/ "s3://${MIRROR_BUCKET}/" \
-            --exclude "*.old" \
-            --cache-control "public, max-age=300"
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
