@@ -1,3 +1,27 @@
+## 3.4.3 (closient fork baseline)
+
+First release from [closient/terraform-provider-stripe](https://github.com/closient/terraform-provider-stripe),
+a fork of the archived `lukasaron/terraform-provider-stripe` baselined at v3.4.1. Published at
+[registry.terraform.io/providers/closient/stripe](https://registry.terraform.io/providers/closient/stripe).
+
+* BUGFIXES:
+  * `stripe_price` destroy is no longer a no-op. Removing a `stripe_price` resource
+    from Terraform config now calls `POST /v1/prices/{id} {active: false}`, matching
+    the semantic the upstream provider uses for other Stripe-immutable resources.
+    Previously the Delete function only cleared state and left the price
+    `active=true`, which surfaced during a Closient billing migration as 16
+    orphaned-but-still-billable prices across two environments
+    ([C-2336](https://linear.app/closient/issue/C-2336)).
+  * Corrected the mis-worded "[WARN] Stripe API doesn't support deletion of
+    promotion code" log emitted by the price Delete function (was copy-pasted
+    from the promotion-code handler).
+
+* NOTES:
+  * Upstream `lukasaron/stripe` was archived 2026-04-17. Shortly after
+    publishing v3.4.3 we discovered Stripe ship an official provider at
+    [stripe/stripe](https://registry.terraform.io/providers/stripe/stripe)
+    and migrated to it. This fork is retired — see README.md.
+
 ## 3.4.1
 * BUGFIXES:
   * Resource file sets links properly
